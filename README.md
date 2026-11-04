@@ -74,7 +74,8 @@ sudo xns migrate
 4. 如果存在 `/etc/V2bX/sing_origin.json`，复制到 `/etc/xboard-node/sing_origin.json`
 5. 在 `config.yml` 中启用 `kernel.custom_config`
 6. 停止并禁用 V2bX
-7. 启动 Xboard-Node 并做健康检查
+7. 启用 Xboard-Node 开机自启
+8. 启动 Xboard-Node 并做稳定性健康检查
 
 迁移不会解析 `/etc/V2bX/config.json` 中的协议、节点或内核。节点由面板分配给 Machine。
 
@@ -123,6 +124,7 @@ sudo xns migrate \
 
 - 迁移前备份到 `/etc/xboard-node/backups/migrations/`
 - Machine Token 不会写入迁移状态文件
+- Token 输入会明文显示，便于发现输错；请在可信、无录屏的环境操作
 - 非交互命令的 Token 可能留在 shell 历史中，建议优先使用交互模式
 
 ## 开发测试

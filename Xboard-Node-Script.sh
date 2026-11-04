@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SCRIPT_NAME="Xboard-Node-Script"
-SCRIPT_VERSION="1.0.7"
+SCRIPT_VERSION="1.0.8"
 SCRIPT_RAW_BASE="${XBOARD_SCRIPT_RAW_BASE:-https://raw.githubusercontent.com/ChampagneA7/Xboard-Node-Script/main}"
 OFFICIAL_INSTALL_URL="${XBOARD_NODE_INSTALL_URL:-https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh}"
 
@@ -85,21 +85,6 @@ prompt_value() {
     [[ -n $default_value ]] && suffix=" [${default_value}]: "
     value=$(read_line "${prompt}${suffix}")
     [[ -z $value ]] && value=$default_value
-    printf -v "$__result" '%s' "$value"
-}
-
-prompt_secret() {
-    local __result=$1
-    local prompt=$2
-    local value=""
-
-    printf '%s' "$prompt" >&2
-    if [[ -r /dev/tty ]]; then
-        IFS= read -r -s value </dev/tty
-    else
-        IFS= read -r -s value
-    fi
-    printf '\n' >&2
     printf -v "$__result" '%s' "$value"
 }
 
@@ -484,6 +469,11 @@ start_xboard() {
         log_error "Xboard-Node 开机自启设置失败。"
         return 1
     fi
+    if ! systemctl is-enabled --quiet "$XBOARD_SERVICE"; then
+        log_error "Xboard-Node 开机自启状态验证失败。"
+        return 1
+    fi
+    log_ok "Xboard-Node 已设置开机自启。"
     started_at=$(date +%s)
     if ! systemctl restart "$XBOARD_SERVICE"; then
         log_error "Xboard-Node 重启失败。"
@@ -498,7 +488,7 @@ start_xboard() {
         journalctl -u "$XBOARD_SERVICE" --since "@${started_at}" -n 30 --no-pager -l || true
         return 1
     fi
-    log_ok "Xboard-Node 已启动。"
+    log_ok "Xboard-Node 已启动，开机自启已启用。"
     discovered=$(journalctl -u "$XBOARD_SERVICE" --since "2 minutes ago" --no-pager 2>/dev/null \
         | sed -n 's/.*discovered \([0-9][0-9]*\) nodes.*/\1/p' \
         | tail -n 1)
@@ -643,7 +633,7 @@ cmd_migrate() {
     [[ -n $panel ]] || die "面板地址不能为空。"
     panel=$(normalize_panel_url "$panel")
 
-    [[ -n $token ]] || prompt_secret token "Machine Token: "
+    [[ -n $token ]] || prompt_value token "Machine Token" ""
     [[ -n $token ]] || die "Machine Token 不能为空。"
 
     [[ -n $machine_id ]] || prompt_value machine_id "Machine ID" ""
@@ -718,12 +708,12 @@ cmd_install() {
     if [[ $mode == "machine" ]]; then
         prompt_value machine_id "Machine ID" ""
         is_positive_int "$machine_id" || die "Machine ID 必须是正整数。"
-        prompt_secret token "Machine Token: "
+        prompt_value token "Machine Token" ""
     else
         prompt_value node_id "Node ID" ""
         is_positive_int "$node_id" || die "Node ID 必须是正整数。"
         prompt_value node_type "节点协议（可留空）" ""
-        prompt_secret token "服务器 Token: "
+        prompt_value token "服务器 Token" ""
     fi
     [[ -n $token ]] || die "Token 不能为空。"
     prompt_value kernel "内核 (singbox/xray)" "$kernel"
