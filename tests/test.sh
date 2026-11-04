@@ -49,6 +49,18 @@ if is_port 65536; then fail "port above max"; fi
 if is_port abc; then fail "non-numeric port"; fi
 if is_port 999999999999999999999999; then fail "oversized port"; fi
 
+node_summary=$(printf '%s\n' \
+    'machine: starting node 9 (vless/🇭🇰香港测试)' \
+    'machine: starting node 10 (trojan/测试节点)' | extract_node_summaries)
+grep -qx 'node_id=9 protocol=vless' <<<"$node_summary" || fail "vless node summary"
+grep -qx 'node_id=10 protocol=trojan' <<<"$node_summary" || fail "trojan node summary"
+
+listener_summary=$(printf '%s\n' \
+    '[vless:9011] started, 1 users' \
+    '[trojan:9443] started, 1 users' | extract_listener_summaries)
+grep -qx 'vless:9011' <<<"$listener_summary" || fail "vless listener summary"
+grep -qx 'trojan:9443' <<<"$listener_summary" || fail "trojan listener summary"
+
 if bash "$SCRIPT" migrate --panel >/dev/null 2>&1; then
     fail "missing --panel value should fail"
 fi

@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SCRIPT_NAME="Xboard-Node-Script"
-SCRIPT_VERSION="1.0.2"
+SCRIPT_VERSION="1.0.3"
 SCRIPT_RAW_BASE="${XBOARD_SCRIPT_RAW_BASE:-https://raw.githubusercontent.com/ChampagneA7/Xboard-Node-Script/main}"
 OFFICIAL_INSTALL_URL="${XBOARD_NODE_INSTALL_URL:-https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh}"
 
@@ -435,6 +435,31 @@ wait_for_health() {
     return 1
 }
 
+extract_node_summaries() {
+    LC_ALL=C sed -n 's/.*machine: starting node \([0-9][0-9]*\) (\([[:alnum:]_-]*\)\/.*/node_id=\1 protocol=\2/p' \
+        | sort -u
+}
+
+extract_listener_summaries() {
+    LC_ALL=C sed -n 's/.*\[\([a-z0-9][a-z0-9-]*:[0-9][0-9]*\)\] started.*/\1/p' \
+        | sort -u
+}
+
+show_runtime_summary() {
+    local recent_log nodes listeners
+
+    recent_log=$(journalctl -u "$XBOARD_SERVICE" --since "5 minutes ago" --no-pager 2>/dev/null || true)
+    nodes=$(printf '%s\n' "$recent_log" | extract_node_summaries | paste -sd ',' -)
+    listeners=$(printf '%s\n' "$recent_log" | extract_listener_summaries | paste -sd ',' -)
+
+    if [[ -n $nodes ]]; then
+        log_info "当前 Machine 节点：${nodes}"
+    fi
+    if [[ -n $listeners ]]; then
+        log_info "当前监听端口：${listeners}"
+    fi
+}
+
 start_xboard() {
     local discovered
 
@@ -457,6 +482,7 @@ start_xboard() {
     elif [[ -n $discovered ]]; then
         log_ok "当前发现 ${discovered} 个节点。"
     fi
+    show_runtime_summary
 }
 
 stop_v2bx() {
