@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SCRIPT_NAME="Xboard-Node-Script"
-SCRIPT_VERSION="1.0.5"
+SCRIPT_VERSION="1.0.6"
 SCRIPT_RAW_BASE="${XBOARD_SCRIPT_RAW_BASE:-https://raw.githubusercontent.com/ChampagneA7/Xboard-Node-Script/main}"
 OFFICIAL_INSTALL_URL="${XBOARD_NODE_INSTALL_URL:-https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh}"
 
@@ -446,11 +446,18 @@ extract_listener_summaries() {
 }
 
 show_runtime_summary() {
-    local recent_log nodes listeners
+    local remaining=5 recent_log nodes listeners
 
-    recent_log=$(journalctl -u "$XBOARD_SERVICE" --since "5 minutes ago" --no-pager 2>/dev/null || true)
-    nodes=$(printf '%s\n' "$recent_log" | extract_node_summaries | paste -sd ',' -)
-    listeners=$(printf '%s\n' "$recent_log" | extract_listener_summaries | paste -sd ',' -)
+    while ((remaining > 0)); do
+        recent_log=$(journalctl -u "$XBOARD_SERVICE" --since "5 minutes ago" --no-pager 2>/dev/null || true)
+        nodes=$(printf '%s\n' "$recent_log" | extract_node_summaries | paste -sd ',' -)
+        listeners=$(printf '%s\n' "$recent_log" | extract_listener_summaries | paste -sd ',' -)
+        if [[ -n $nodes || -n $listeners ]]; then
+            break
+        fi
+        remaining=$((remaining - 1))
+        sleep 1
+    done
 
     if [[ -n $nodes ]]; then
         log_info "当前 Machine 节点：${nodes}"
