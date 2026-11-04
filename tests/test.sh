@@ -61,6 +61,14 @@ listener_summary=$(printf '%s\n' \
 grep -qx 'vless:9011' <<<"$listener_summary" || fail "vless listener summary"
 grep -qx 'trojan:9443' <<<"$listener_summary" || fail "trojan listener summary"
 
+printf '%s\n' 'ERROR machine instance exited with error' | runtime_log_has_fatal_error \
+    || fail "machine fatal runtime error not detected"
+printf '%s\n' 'machine nodes status 403' | runtime_log_has_fatal_error \
+    || fail "machine 403 error not detected"
+if printf '%s\n' 'INFO service started' | runtime_log_has_fatal_error; then
+    fail "normal startup log marked fatal"
+fi
+
 if bash "$SCRIPT" migrate --panel >/dev/null 2>&1; then
     fail "missing --panel value should fail"
 fi

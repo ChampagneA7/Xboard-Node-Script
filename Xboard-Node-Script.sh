@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SCRIPT_NAME="Xboard-Node-Script"
-SCRIPT_VERSION="1.0.6"
+SCRIPT_VERSION="1.0.7"
 SCRIPT_RAW_BASE="${XBOARD_SCRIPT_RAW_BASE:-https://raw.githubusercontent.com/ChampagneA7/Xboard-Node-Script/main}"
 OFFICIAL_INSTALL_URL="${XBOARD_NODE_INSTALL_URL:-https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh}"
 
@@ -422,17 +422,26 @@ wait_for_health() {
 
     service_active "$XBOARD_SERVICE" || return 1
     port=$(current_health_port)
-    [[ -z $port || $port -eq 0 ]] && return 0
-    command -v curl >/dev/null 2>&1 || return 0
+    if [[ -z $port || $port -eq 0 ]] || ! command -v curl >/dev/null 2>&1; then
+        sleep 3
+        service_active "$XBOARD_SERVICE"
+        return
+    fi
 
     log_info "等待健康检查：http://127.0.0.1:${port}/healthz"
     while ((SECONDS < deadline)); do
         if curl -fsS --max-time 2 "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
-            return 0
+            sleep 3
+            service_active "$XBOARD_SERVICE"
+            return
         fi
         sleep 1
     done
     return 1
+}
+
+runtime_log_has_fatal_error() {
+    grep -Eq 'machine instance exited with error|machine nodes status (401|403)|Machine not found or disabled'
 }
 
 extract_node_summaries() {
@@ -468,16 +477,25 @@ show_runtime_summary() {
 }
 
 start_xboard() {
-    local discovered
+    local discovered started_at
 
     systemctl daemon-reload
-    systemctl enable "$XBOARD_SERVICE" >/dev/null 2>&1 || true
+    if ! systemctl enable "$XBOARD_SERVICE" >/dev/null 2>&1; then
+        log_error "Xboard-Node 开机自启设置失败。"
+        return 1
+    fi
+    started_at=$(date +%s)
     if ! systemctl restart "$XBOARD_SERVICE"; then
         log_error "Xboard-Node 重启失败。"
         return 1
     fi
     if ! wait_for_health; then
         log_error "Xboard-Node 健康检查失败。"
+        return 1
+    fi
+    if journalctl -u "$XBOARD_SERVICE" --since "@${started_at}" --no-pager 2>/dev/null | runtime_log_has_fatal_error; then
+        log_error "Xboard-Node 已启动但运行时报错，最近日志："
+        journalctl -u "$XBOARD_SERVICE" --since "@${started_at}" -n 30 --no-pager -l || true
         return 1
     fi
     log_ok "Xboard-Node 已启动。"
