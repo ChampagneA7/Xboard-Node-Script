@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SCRIPT_NAME="Xboard-Node-Script"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.1"
 SCRIPT_RAW_BASE="${XBOARD_SCRIPT_RAW_BASE:-https://raw.githubusercontent.com/ChampagneA7/Xboard-Node-Script/main}"
 OFFICIAL_INSTALL_URL="${XBOARD_NODE_INSTALL_URL:-https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh}"
 
@@ -132,8 +132,25 @@ is_non_negative_int() {
     [[ ${1:-} =~ ^[0-9]+$ ]]
 }
 
+is_port() {
+    local port=${1:-}
+    is_non_negative_int "$port" || return 1
+    ((${#port} <= 5)) || return 1
+    ((10#$port >= 0 && 10#$port <= 65535))
+}
+
+take_arg_value() {
+    local option=$1
+    local count=$2
+    local value=${3:-}
+    [[ $count -ge 2 && -n $value && $value != --* ]] \
+        || die "参数 ${option} 缺少值。"
+}
+
 ensure_downloader() {
-    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 && return 0
+    if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+        return 0
+    fi
 
     log_warn "未检测到 curl/wget，尝试安装 curl..."
     if command -v apt-get >/dev/null 2>&1; then
@@ -147,6 +164,8 @@ ensure_downloader() {
     else
         die "请先安装 curl 或 wget。"
     fi
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
+        || die "curl/wget 安装失败。"
 }
 
 fetch_file() {
@@ -209,42 +228,95 @@ backup_file() {
     local label=$2
     local backup_dir="${XBOARD_ROOT}/backups/migrations"
     local stamp
+    local destination
 
     [[ -f $source_path ]] || return 0
-    stamp=$(date +%Y%m%d-%H%M%S)
-    mkdir -p "$backup_dir"
-    cp -a "$source_path" "${backup_dir}/${label}-${stamp}"
-    log_ok "已备份到 ${backup_dir}/${label}-${stamp}"
+    stamp=$(date +%Y%m%d-%H%M%S)-${BASHPID:-$$}
+    destination="${backup_dir}/${label}-${stamp}"
+    if ! mkdir -p "$backup_dir"; then
+        log_error "创建备份目录失败：${backup_dir}"
+        return 1
+    fi
+    if ! cp -a "$source_path" "$destination"; then
+        log_error "备份失败：${source_path}"
+        return 1
+    fi
+    log_ok "已备份到 ${destination}"
 }
 
 record_v2bx_state() {
     local active=0
     local enabled=0
+    local previous_active=0
+    local previous_enabled=0
+    local tmp
 
     service_active "$V2BX_SERVICE" && active=1
     service_enabled "$V2BX_SERVICE" && enabled=1
 
-    mkdir -p "$XBOARD_ROOT"
-    cat >"$XBOARD_STATE_FILE" <<EOF
+    if [[ -f $XBOARD_STATE_FILE ]]; then
+        # Preserve the original rollback state across repeated migrations.
+        # shellcheck disable=SC1090
+        source "$XBOARD_STATE_FILE"
+        previous_active=${V2BX_WAS_ACTIVE:-0}
+        previous_enabled=${V2BX_WAS_ENABLED:-0}
+    fi
+    if [[ $active -eq 0 && $enabled -eq 0 ]] \
+        && [[ $previous_active -eq 1 || $previous_enabled -eq 1 ]]; then
+        active=$previous_active
+        enabled=$previous_enabled
+    fi
+
+    if ! mkdir -p "$XBOARD_ROOT"; then
+        log_error "创建目录失败：${XBOARD_ROOT}"
+        return 1
+    fi
+    tmp=$(mktemp "${XBOARD_STATE_FILE}.XXXXXX") || return 1
+    if ! cat >"$tmp" <<EOF
 V2BX_WAS_ACTIVE=${active}
 V2BX_WAS_ENABLED=${enabled}
 MIGRATION_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
-    chmod 600 "$XBOARD_STATE_FILE"
+    then
+        rm -f "$tmp"
+        log_error "写入迁移状态失败。"
+        return 1
+    fi
+    if ! chmod 600 "$tmp" || ! mv -f "$tmp" "$XBOARD_STATE_FILE"; then
+        rm -f "$tmp"
+        log_error "保存迁移状态失败。"
+        return 1
+    fi
     log_info "已记录 V2bX 状态：active=${active}, enabled=${enabled}"
 }
 
 copy_sing_origin() {
     local source_path=${1:-$V2BX_ORIGIN}
+    local tmp
 
     if [[ ! -f $source_path ]]; then
         log_warn "未找到 ${source_path}，跳过自定义 DNS 迁移。"
         return 0
     fi
-    mkdir -p "$XBOARD_ROOT"
+    if ! mkdir -p "$XBOARD_ROOT"; then
+        log_error "创建目录失败：${XBOARD_ROOT}"
+        return 1
+    fi
     source_path=$(readlink -f "$source_path")
-    if [[ $source_path != "$XBOARD_CUSTOM_CONFIG" ]]; then
-        install -m 0644 "$source_path" "$XBOARD_CUSTOM_CONFIG"
+    if [[ -z $source_path || ! -f $source_path ]]; then
+        log_error "无法解析自定义配置文件路径。"
+        return 1
+    fi
+    if [[ $source_path == "$XBOARD_CUSTOM_CONFIG" ]]; then
+        log_info "自定义配置已在目标位置：${XBOARD_CUSTOM_CONFIG}"
+        return 0
+    fi
+
+    tmp=$(mktemp "${XBOARD_CUSTOM_CONFIG}.XXXXXX") || return 1
+    if ! cp -f "$source_path" "$tmp" || ! chmod 0644 "$tmp" || ! mv -f "$tmp" "$XBOARD_CUSTOM_CONFIG"; then
+        rm -f "$tmp"
+        log_error "迁移自定义配置失败：${source_path}"
+        return 1
     fi
     log_ok "已迁移 ${source_path} -> ${XBOARD_CUSTOM_CONFIG}"
 }
@@ -263,13 +335,17 @@ ensure_custom_config_reference() {
 
     [[ -f $XBOARD_CONFIG ]] || die "配置文件不存在：$XBOARD_CONFIG"
     [[ -f $XBOARD_CUSTOM_CONFIG ]] || return 0
+    if grep -qE '^kernel:[[:space:]]*[^[:space:]]' "$XBOARD_CONFIG"; then
+        log_error "当前 config.yml 使用行内 kernel 配置，脚本无法安全插入 custom_config。"
+        return 1
+    fi
     if grep -q '^kernel:' "$XBOARD_CONFIG" && top_kernel_has_custom_config; then
         log_info "config.yml 已启用 kernel.custom_config。"
         return 0
     fi
 
-    backup_file "$XBOARD_CONFIG" "config.yml"
-    tmp=$(mktemp "${TMPDIR:-/tmp}/xboard-config.XXXXXX") || return 1
+    backup_file "$XBOARD_CONFIG" "config.yml" || return 1
+    tmp=$(mktemp "${XBOARD_CONFIG}.XXXXXX") || return 1
 
     if grep -q '^kernel:' "$XBOARD_CONFIG"; then
         awk -v custom_path="$XBOARD_CUSTOM_CONFIG" '
@@ -306,12 +382,16 @@ ensure_custom_config_reference() {
         } >"$tmp"
     fi
 
-    [[ -s $tmp ]] || {
+    if [[ ! -s $tmp ]]; then
         rm -f "$tmp"
-        die "生成 config.yml 失败。"
-    }
-    install -m 0600 "$tmp" "$XBOARD_CONFIG"
-    rm -f "$tmp"
+        log_error "生成 config.yml 失败。"
+        return 1
+    fi
+    if ! chmod 0600 "$tmp" || ! mv -f "$tmp" "$XBOARD_CONFIG"; then
+        rm -f "$tmp"
+        log_error "写入 config.yml 失败。"
+        return 1
+    fi
     log_ok "已在 config.yml 中启用 kernel.custom_config。"
 }
 
@@ -393,12 +473,44 @@ stop_v2bx() {
     log_ok "V2bX 已停止并取消开机自启，文件未删除。"
 }
 
+cleanup_failed_migration() {
+    local active=1
+    local enabled=1
+
+    log_warn "清理未完成的迁移：停止 Xboard-Node，恢复 V2bX。"
+    if ! systemctl stop "$XBOARD_SERVICE"; then
+        log_error "停止 Xboard-Node 失败，为避免端口冲突，未启动 V2bX。"
+        return 1
+    fi
+
+    if [[ -f $XBOARD_STATE_FILE ]]; then
+        # shellcheck disable=SC1090
+        source "$XBOARD_STATE_FILE"
+        active=${V2BX_WAS_ACTIVE:-1}
+        enabled=${V2BX_WAS_ENABLED:-1}
+    fi
+    if ! v2bx_installed; then
+        log_error "未找到 V2bX，无法恢复原服务。"
+        return 1
+    fi
+    if [[ $enabled -eq 1 ]]; then
+        systemctl enable "$V2BX_SERVICE" >/dev/null 2>&1 || true
+    fi
+    if [[ $active -eq 1 ]] && ! systemctl start "$V2BX_SERVICE"; then
+        log_error "恢复 V2bX 失败，请手动检查。"
+        return 1
+    fi
+    log_ok "V2bX 已恢复。"
+}
+
 rollback_to_v2bx() {
     local active=1
     local enabled=1
 
     require_root
     require_linux_systemd
+    v2bx_installed || die "未找到 V2bX，无法回滚；Xboard-Node 未停止。"
+
     if [[ -f $XBOARD_STATE_FILE ]]; then
         # shellcheck disable=SC1090
         source "$XBOARD_STATE_FILE"
@@ -406,15 +518,21 @@ rollback_to_v2bx() {
         enabled=${V2BX_WAS_ENABLED:-1}
     fi
 
-    systemctl stop "$XBOARD_SERVICE" 2>/dev/null || true
+    if ! systemctl stop "$XBOARD_SERVICE"; then
+        log_error "停止 Xboard-Node 失败，回滚未完成。"
+        return 1
+    fi
     systemctl disable "$XBOARD_SERVICE" >/dev/null 2>&1 || true
-    v2bx_installed || die "未找到 V2bX，无法回滚。"
 
     if [[ $enabled -eq 1 ]]; then
         systemctl enable "$V2BX_SERVICE" >/dev/null 2>&1 || true
     fi
     if [[ $active -eq 1 ]]; then
-        systemctl start "$V2BX_SERVICE" || die "V2bX 启动失败。"
+        if ! systemctl start "$V2BX_SERVICE"; then
+            log_error "V2bX 启动失败，尝试恢复 Xboard-Node。"
+            systemctl start "$XBOARD_SERVICE" >/dev/null 2>&1 || true
+            return 1
+        fi
     fi
     log_ok "已回滚到 V2bX；Xboard-Node 文件保留。"
 }
@@ -451,15 +569,20 @@ cmd_migrate() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --panel) panel=${2:-}; shift 2 ;;
-            --token) token=${2:-}; shift 2 ;;
-            --machine-id) machine_id=${2:-}; shift 2 ;;
-            --health-port) health_port=${2:-}; shift 2 ;;
-            --custom-config) custom_source=${2:-}; shift 2 ;;
+            --panel) take_arg_value "$1" "$#" "${2:-}"; panel=$2; shift 2 ;;
+            --token) take_arg_value "$1" "$#" "${2:-}"; token=$2; shift 2 ;;
+            --machine-id) take_arg_value "$1" "$#" "${2:-}"; machine_id=$2; shift 2 ;;
+            --health-port) take_arg_value "$1" "$#" "${2:-}"; health_port=$2; shift 2 ;;
+            --custom-config) take_arg_value "$1" "$#" "${2:-}"; custom_source=$2; shift 2 ;;
             --yes|-y) non_interactive=1; shift ;;
             *) die "未知参数：$1" ;;
         esac
     done
+
+    if [[ $non_interactive -eq 1 ]]; then
+        [[ -n $panel && -n $token && -n $machine_id ]] \
+            || die "--yes 模式必须同时提供 --panel、--token 和 --machine-id。"
+    fi
 
     require_root
     require_linux_systemd
@@ -474,7 +597,7 @@ cmd_migrate() {
 
     [[ -n $machine_id ]] || prompt_value machine_id "Machine ID" ""
     is_positive_int "$machine_id" || die "Machine ID 必须是正整数。"
-    is_non_negative_int "$health_port" || health_port=65530
+    is_port "$health_port" || die "健康检查端口必须在 0-65535 之间。"
 
     printf '\n'
     log_info "迁移配置："
@@ -486,9 +609,10 @@ cmd_migrate() {
         return 0
     fi
 
-    record_v2bx_state
-    backup_file "$V2BX_CONFIG" "V2bX-config.json"
-    backup_file "$XBOARD_CONFIG" "config.yml"
+    record_v2bx_state || die "无法记录 V2bX 状态，迁移未开始。"
+    backup_file "$V2BX_CONFIG" "V2bX-config.json" || die "V2bX 配置备份失败，迁移未开始。"
+    backup_file "$XBOARD_CONFIG" "config.yml" || die "Xboard-Node 配置备份失败，迁移未开始。"
+    backup_file "$XBOARD_CUSTOM_CONFIG" "sing_origin.json" || die "Xboard-Node 自定义配置备份失败，迁移未开始。"
     xboard_installed && force=1
 
     log_info "执行官方 Machine mode 安装..."
@@ -497,18 +621,27 @@ cmd_migrate() {
         return 1
     fi
 
-    copy_sing_origin "$custom_source"
-    ensure_custom_config_reference
+    if ! copy_sing_origin "$custom_source"; then
+        cleanup_failed_migration || true
+        return 1
+    fi
+    if ! ensure_custom_config_reference; then
+        cleanup_failed_migration || true
+        return 1
+    fi
 
     if ! stop_v2bx; then
         log_error "停止 V2bX 失败，切换未完成。"
+        cleanup_failed_migration || true
         return 1
     fi
 
     if ! start_xboard; then
         log_error "Xboard-Node 启动验证失败。"
         if [[ $non_interactive -eq 1 ]] || confirm "是否立即回滚到 V2bX" "y"; then
-            rollback_to_v2bx
+            if ! rollback_to_v2bx; then
+                log_error "自动回滚失败，请立即手动检查。"
+            fi
         fi
         return 1
     fi
@@ -548,7 +681,7 @@ cmd_install() {
         *) die "内核仅支持 singbox 或 xray。" ;;
     esac
     prompt_value health_port "健康检查端口" "$health_port"
-    is_non_negative_int "$health_port" || die "健康检查端口必须是非负整数。"
+    is_port "$health_port" || die "健康检查端口必须在 0-65535 之间。"
 
     xboard_installed && force=1
     local args=(install --mode "$mode" --panel "$panel" --token "$token" --kernel "$kernel" --health-port "$health_port" --yes)
@@ -560,6 +693,7 @@ cmd_install() {
         [[ -n $node_type ]] && args+=(--node-type "$node_type")
     fi
     run_official_installer "${args[@]}" || die "安装失败。"
+    wait_for_health || die "安装完成，但健康检查失败，请查看：xns log"
     log_ok "Xboard-Node 安装完成。"
 }
 
@@ -567,7 +701,14 @@ cmd_start() {
     require_root
     require_linux_systemd
     xboard_installed || die "Xboard-Node 尚未安装。"
-    systemctl start "$XBOARD_SERVICE"
+    if ! systemctl start "$XBOARD_SERVICE"; then
+        log_error "Xboard-Node 启动失败。"
+        return 1
+    fi
+    if ! wait_for_health; then
+        log_error "Xboard-Node 启动后健康检查失败。"
+        return 1
+    fi
     log_ok "Xboard-Node 已启动。"
 }
 
@@ -575,7 +716,14 @@ cmd_stop() {
     require_root
     require_linux_systemd
     xboard_installed || die "Xboard-Node 尚未安装。"
-    systemctl stop "$XBOARD_SERVICE"
+    if ! systemctl stop "$XBOARD_SERVICE"; then
+        log_error "Xboard-Node 停止失败。"
+        return 1
+    fi
+    if service_active "$XBOARD_SERVICE"; then
+        log_error "Xboard-Node 停止命令完成，但服务仍在运行。"
+        return 1
+    fi
     log_ok "Xboard-Node 已停止。"
 }
 
@@ -583,7 +731,10 @@ cmd_restart() {
     require_root
     require_linux_systemd
     xboard_installed || die "Xboard-Node 尚未安装。"
-    systemctl restart "$XBOARD_SERVICE"
+    if ! systemctl restart "$XBOARD_SERVICE"; then
+        log_error "Xboard-Node 重启命令失败。"
+        return 1
+    fi
     if wait_for_health; then
         log_ok "Xboard-Node 重启成功。"
     else
@@ -613,7 +764,10 @@ cmd_enable() {
     require_root
     require_linux_systemd
     xboard_installed || die "Xboard-Node 尚未安装。"
-    systemctl enable "$XBOARD_SERVICE"
+    if ! systemctl enable "$XBOARD_SERVICE"; then
+        log_error "设置开机自启失败。"
+        return 1
+    fi
     log_ok "已设置开机自启。"
 }
 
@@ -621,7 +775,10 @@ cmd_disable() {
     require_root
     require_linux_systemd
     xboard_installed || die "Xboard-Node 尚未安装。"
-    systemctl disable "$XBOARD_SERVICE"
+    if ! systemctl disable "$XBOARD_SERVICE"; then
+        log_error "取消开机自启失败。"
+        return 1
+    fi
     log_ok "已取消开机自启。"
 }
 
@@ -630,6 +787,7 @@ cmd_update() {
     require_linux_systemd
     xboard_installed || die "Xboard-Node 尚未安装。"
     run_official_installer upgrade || die "升级失败。"
+    wait_for_health || die "升级完成，但健康检查失败，请查看：xns log"
     log_ok "Xboard-Node 升级完成。"
 }
 
@@ -667,10 +825,17 @@ cmd_health() {
     command -v curl >/dev/null 2>&1 || die "未找到 curl。"
     port=$(current_health_port)
     if [[ -z $port || $port -eq 0 ]]; then
-        systemctl is-active "$XBOARD_SERVICE"
-        return
+        if systemctl is-active "$XBOARD_SERVICE"; then
+            log_ok "服务正在运行，健康检查端口已禁用。"
+            return 0
+        fi
+        log_error "服务未运行。"
+        return 1
     fi
-    curl -fsS "http://127.0.0.1:${port}/healthz"
+    if ! curl -fsS "http://127.0.0.1:${port}/healthz"; then
+        log_error "健康检查失败。"
+        return 1
+    fi
     printf '\n'
     log_ok "健康检查通过。"
 }
@@ -687,6 +852,7 @@ cmd_config() {
     if confirm "是否重启 Xboard-Node 使配置生效" "y"; then
         if ! cmd_restart; then
             log_warn "配置可能无效，查看日志：xns log"
+            return 1
         fi
     fi
 }
@@ -696,7 +862,7 @@ cmd_dns() {
     [[ -f $XBOARD_CUSTOM_CONFIG ]] || die "配置文件不存在：$XBOARD_CUSTOM_CONFIG"
     "${EDITOR:-vi}" "$XBOARD_CUSTOM_CONFIG"
     if confirm "是否重启 Xboard-Node 使配置生效" "y"; then
-        cmd_restart
+        cmd_restart || return 1
     fi
 }
 
@@ -715,8 +881,10 @@ cmd_update_script() {
         rm -f "$pending"
         die "新脚本语法校验失败，当前脚本未改动。"
     fi
-    chmod 0755 "$pending"
-    mv -f "$pending" "$current"
+    if ! chmod 0755 "$pending" || ! mv -f "$pending" "$current"; then
+        rm -f "$pending"
+        die "替换管理脚本失败。"
+    fi
     log_ok "管理脚本已更新，请重新运行。"
 }
 
