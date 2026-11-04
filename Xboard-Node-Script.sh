@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SCRIPT_NAME="Xboard-Node-Script"
-SCRIPT_VERSION="1.0.4"
+SCRIPT_VERSION="1.0.5"
 SCRIPT_RAW_BASE="${XBOARD_SCRIPT_RAW_BASE:-https://raw.githubusercontent.com/ChampagneA7/Xboard-Node-Script/main}"
 OFFICIAL_INSTALL_URL="${XBOARD_NODE_INSTALL_URL:-https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh}"
 
@@ -895,13 +895,14 @@ cmd_dns() {
 }
 
 cmd_update_script() {
-    local current pending
+    local current pending source_url
     require_root
     ensure_downloader
     current=$(readlink -f "${BASH_SOURCE[0]}")
     pending=$(mktemp "${current}.update.XXXXXX") || return 1
+    source_url="${SCRIPT_RAW_BASE}/Xboard-Node-Script.sh?ts=$(date +%s)"
 
-    if ! fetch_file "${SCRIPT_RAW_BASE}/Xboard-Node-Script.sh" "$pending"; then
+    if ! fetch_file "$source_url" "$pending"; then
         rm -f "$pending"
         die "下载管理脚本失败。"
     fi

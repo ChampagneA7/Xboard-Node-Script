@@ -38,11 +38,12 @@ fi
 
 if [[ -z $source_script ]]; then
     tmp=$(mktemp "${TMPDIR:-/tmp}/Xboard-Node-Script.XXXXXX")
+    cache_bust=$(date +%s)
     if command -v curl >/dev/null 2>&1; then
         curl -fLsS --retry 3 --connect-timeout 15 --max-time 180 \
-            -o "$tmp" "${SCRIPT_RAW_BASE}/Xboard-Node-Script.sh"
+            -o "$tmp" "${SCRIPT_RAW_BASE}/Xboard-Node-Script.sh?ts=${cache_bust}"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$tmp" "${SCRIPT_RAW_BASE}/Xboard-Node-Script.sh"
+        wget -q -O "$tmp" "${SCRIPT_RAW_BASE}/Xboard-Node-Script.sh?ts=${cache_bust}"
     else
         die "未找到 curl 或 wget。"
     fi
