@@ -80,6 +80,26 @@ sudo xns migrate
 
 迁移不会解析 `/etc/V2bX/config.json` 中的协议、节点或内核。节点由面板分配给 Machine。
 
+## 新安装引导
+
+运行：
+
+```bash
+sudo xns install
+```
+
+会依次询问：
+
+1. 面板地址
+2. 运行模式，默认 Machine mode
+3. Machine Token 或服务器 Token
+4. Machine ID 或 Node ID
+5. 内核，默认 singbox
+6. 健康检查端口，默认 65530
+7. 是否仅使用 IPv4，默认是
+
+选择仅使用 IPv4 后，会生成 `sing_origin.json`、启用 `kernel.custom_config`，最后设置开机自启并启动验证。
+
 V2bX 的程序和配置不会删除。需要恢复时运行：
 
 ```bash

@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SCRIPT_NAME="Xboard-Node-Script"
-SCRIPT_VERSION="1.0.10"
+SCRIPT_VERSION="1.0.11"
 SCRIPT_RAW_BASE="${XBOARD_SCRIPT_RAW_BASE:-https://raw.githubusercontent.com/ChampagneA7/Xboard-Node-Script/main}"
 OFFICIAL_INSTALL_URL="${XBOARD_NODE_INSTALL_URL:-https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh}"
 
@@ -732,7 +732,7 @@ cmd_migrate() {
 
 cmd_install() {
     local panel="" token="" mode="" machine_id="" node_id="" node_type=""
-    local kernel="singbox" health_port=65530 force=0
+    local kernel="singbox" health_port=65530 force=0 ipv4_only=1
 
     require_root
     require_linux_systemd
@@ -754,6 +754,9 @@ cmd_install() {
         prompt_value token "服务器 Token" ""
     fi
     [[ -n $token ]] || die "Token 不能为空。"
+    if ! confirm "是否仅使用 IPv4（推荐，可避免服务器没有 IPv6 出口的报错）" "y"; then
+        ipv4_only=0
+    fi
     prompt_value kernel "内核 (singbox/xray)" "$kernel"
     case "$kernel" in
         singbox|xray) ;;
@@ -761,7 +764,6 @@ cmd_install() {
     esac
     prompt_value health_port "健康检查端口" "$health_port"
     is_port "$health_port" || die "健康检查端口必须在 0-65535 之间。"
-
     xboard_installed && force=1
     local args=(install --mode "$mode" --panel "$panel" --token "$token" --kernel "$kernel" --health-port "$health_port" --yes)
     [[ $force -eq 1 ]] && args+=(--force-reconfigure)
@@ -772,8 +774,21 @@ cmd_install() {
         [[ -n $node_type ]] && args+=(--node-type "$node_type")
     fi
     run_official_installer "${args[@]}" || die "安装失败。"
-    wait_for_health || die "安装完成，但健康检查失败，请查看：xns log"
-    log_ok "Xboard-Node 安装完成。"
+    if [[ $ipv4_only -eq 1 ]]; then
+        backup_file "$XBOARD_CUSTOM_CONFIG" "sing_origin.json" || die "自定义配置备份失败。"
+        if ! write_ipv4_custom_config; then
+            systemctl stop "$XBOARD_SERVICE" 2>/dev/null || true
+            die "IPv4-only 配置生成失败，服务已停止。"
+        fi
+        if ! ensure_custom_config_reference; then
+            systemctl stop "$XBOARD_SERVICE" 2>/dev/null || true
+            die "启用 custom_config 失败，服务已停止。"
+        fi
+    else
+        log_info "已选择保留 IPv6。不会创建或修改 sing_origin.json。"
+    fi
+    start_xboard || die "安装完成，但开机自启或启动验证失败。"
+    log_ok "Xboard-Node 安装完成，开机自启和启动验证已通过。"
 }
 
 cmd_start() {
