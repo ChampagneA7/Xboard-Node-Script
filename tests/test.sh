@@ -109,24 +109,22 @@ instances:
       log_level: warn
 EOF
 
-cp "${ROOT_DIR}/tests/fixtures/sing_origin.json" "$XBOARD_CUSTOM_CONFIG"
+write_ipv4_custom_config
 ensure_custom_config_reference
 
 grep -q '^kernel:$' "$XBOARD_CONFIG" || fail "top-level kernel missing"
 grep -q "custom_config: \"$XBOARD_CUSTOM_CONFIG\"" "$XBOARD_CONFIG" || fail "custom_config missing"
 grep -q '^instances:$' "$XBOARD_CONFIG" || fail "instances block missing"
+grep -q '"tag": "local-dns"' "$XBOARD_CUSTOM_CONFIG" || fail "local-dns missing"
+grep -q '"strategy": "ipv4_only"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv4 strategy missing"
+grep -q '"tag": "direct-ipv4"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv4 direct outbound missing"
+grep -q '"domain_resolver": "local-dns"' "$XBOARD_CUSTOM_CONFIG" || fail "domain resolver missing"
+grep -q '"default_domain_resolver": "local-dns"' "$XBOARD_CUSTOM_CONFIG" || fail "default domain resolver missing"
 
 # A second invocation must not duplicate the key.
 ensure_custom_config_reference
 count=$(grep -c "custom_config: \"$XBOARD_CUSTOM_CONFIG\"" "$XBOARD_CONFIG")
 [[ $count -eq 1 ]] || fail "custom_config duplicated"
-
-# Copying sing_origin should produce the same file atomically.
-source_custom="${TEST_ROOT}/source-sing_origin.json"
-rm -f "$XBOARD_CUSTOM_CONFIG"
-cp "${ROOT_DIR}/tests/fixtures/sing_origin.json" "$source_custom"
-copy_sing_origin "$source_custom"
-cmp -s "$source_custom" "$XBOARD_CUSTOM_CONFIG" || fail "sing_origin copy mismatch"
 
 # rollback must not stop Xboard-Node when V2bX is unavailable.
 : >"$SYSTEMCTL_LOG"
@@ -192,7 +190,7 @@ migration_trace="${TEST_ROOT}/migration-trace"
     backup_file() { :; }
     xboard_installed() { return 1; }
     install_machine() { return 0; }
-    copy_sing_origin() { return 1; }
+    write_ipv4_custom_config() { return 1; }
     ensure_custom_config_reference() { return 0; }
     stop_v2bx() { printf 'stop-v2bx\n' >>"$migration_trace"; return 0; }
     cleanup_failed_migration() { printf 'cleanup\n' >>"$migration_trace"; return 0; }
@@ -201,8 +199,8 @@ migration_trace="${TEST_ROOT}/migration-trace"
         exit 1
     fi
     exit 0
-) || fail "migration copy failure should return non-zero"
-[[ $(cat "$migration_trace") == "cleanup" ]] || fail "migration did not clean up after copy failure"
+) || fail "migration IPv4 config failure should return non-zero"
+[[ $(cat "$migration_trace") == "cleanup" ]] || fail "migration did not clean up after IPv4 config failure"
 
 # Inline top-level kernel mappings are rejected instead of being corrupted.
 inline_config="${TEST_ROOT}/inline-config.yml"

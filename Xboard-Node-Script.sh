@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SCRIPT_NAME="Xboard-Node-Script"
-SCRIPT_VERSION="1.0.8"
+SCRIPT_VERSION="1.0.9"
 SCRIPT_RAW_BASE="${XBOARD_SCRIPT_RAW_BASE:-https://raw.githubusercontent.com/ChampagneA7/Xboard-Node-Script/main}"
 OFFICIAL_INSTALL_URL="${XBOARD_NODE_INSTALL_URL:-https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh}"
 
@@ -15,7 +15,6 @@ XBOARD_BIN="${XBOARD_BIN:-/usr/local/bin/xboard-node}"
 XBCTL_BIN="${XBCTL_BIN:-/usr/local/bin/xbctl}"
 
 V2BX_CONFIG="${V2BX_CONFIG:-/etc/V2bX/config.json}"
-V2BX_ORIGIN="${V2BX_ORIGIN:-/etc/V2bX/sing_origin.json}"
 V2BX_SERVICE="${V2BX_SERVICE:-V2bX.service}"
 V2BX_BIN="${V2BX_BIN:-/usr/local/V2bX/V2bX}"
 
@@ -275,35 +274,57 @@ EOF
     log_info "已记录 V2bX 状态：active=${active}, enabled=${enabled}"
 }
 
-copy_sing_origin() {
-    local source_path=${1:-$V2BX_ORIGIN}
+write_ipv4_custom_config() {
     local tmp
 
-    if [[ ! -f $source_path ]]; then
-        log_warn "未找到 ${source_path}，跳过自定义 DNS 迁移。"
-        return 0
-    fi
     if ! mkdir -p "$XBOARD_ROOT"; then
         log_error "创建目录失败：${XBOARD_ROOT}"
         return 1
     fi
-    source_path=$(readlink -f "$source_path")
-    if [[ -z $source_path || ! -f $source_path ]]; then
-        log_error "无法解析自定义配置文件路径。"
-        return 1
-    fi
-    if [[ $source_path == "$XBOARD_CUSTOM_CONFIG" ]]; then
-        log_info "自定义配置已在目标位置：${XBOARD_CUSTOM_CONFIG}"
-        return 0
-    fi
-
     tmp=$(mktemp "${XBOARD_CUSTOM_CONFIG}.XXXXXX") || return 1
-    if ! cp -f "$source_path" "$tmp" || ! chmod 0644 "$tmp" || ! mv -f "$tmp" "$XBOARD_CUSTOM_CONFIG"; then
+    if ! cat >"$tmp" <<'JSON'
+{
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "local-dns",
+        "server": "1.1.1.1"
+      }
+    ],
+    "final": "local-dns",
+    "strategy": "ipv4_only"
+  },
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct-ipv4",
+      "domain_resolver": "local-dns"
+    }
+  ],
+  "route": {
+    "default_domain_resolver": "local-dns",
+    "rules": [
+      {
+        "ip_cidr": ["::/0"],
+        "outbound": "block"
+      }
+    ],
+    "final": "direct-ipv4"
+  }
+}
+JSON
+    then
         rm -f "$tmp"
-        log_error "迁移自定义配置失败：${source_path}"
+        log_error "写入 IPv4-only 配置失败。"
         return 1
     fi
-    log_ok "已迁移 ${source_path} -> ${XBOARD_CUSTOM_CONFIG}"
+    if ! chmod 0644 "$tmp" || ! mv -f "$tmp" "$XBOARD_CUSTOM_CONFIG"; then
+        rm -f "$tmp"
+        log_error "保存 IPv4-only 配置失败。"
+        return 1
+    fi
+    log_ok "已生成 IPv4-only 配置：${XBOARD_CUSTOM_CONFIG}"
 }
 
 top_kernel_has_custom_config() {
@@ -605,8 +626,8 @@ choose_mode() {
 }
 
 cmd_migrate() {
-    local panel="" token="" machine_id="" custom_source=$V2BX_ORIGIN
-    local health_port=65530 non_interactive=0 force=0
+    local panel="" token="" machine_id=""
+    local health_port=65530 non_interactive=0 force=0 ipv4_only=1
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -614,7 +635,8 @@ cmd_migrate() {
             --token) take_arg_value "$1" "$#" "${2:-}"; token=$2; shift 2 ;;
             --machine-id) take_arg_value "$1" "$#" "${2:-}"; machine_id=$2; shift 2 ;;
             --health-port) take_arg_value "$1" "$#" "${2:-}"; health_port=$2; shift 2 ;;
-            --custom-config) take_arg_value "$1" "$#" "${2:-}"; custom_source=$2; shift 2 ;;
+            --ipv4-only) ipv4_only=1; shift ;;
+            --allow-ipv6) ipv4_only=0; shift ;;
             --yes|-y) non_interactive=1; shift ;;
             *) die "未知参数：$1" ;;
         esac
@@ -639,12 +661,21 @@ cmd_migrate() {
     [[ -n $machine_id ]] || prompt_value machine_id "Machine ID" ""
     is_positive_int "$machine_id" || die "Machine ID 必须是正整数。"
     is_port "$health_port" || die "健康检查端口必须在 0-65535 之间。"
+    if [[ $non_interactive -ne 1 ]]; then
+        if ! confirm "是否仅使用 IPv4（推荐，可避免服务器没有 IPv6 出口的报错）" "y"; then
+            ipv4_only=0
+        fi
+    fi
 
     printf '\n'
     log_info "迁移配置："
     printf '  面板地址: %s\n' "$panel"
     printf '  Machine ID: %s\n' "$machine_id"
-    printf '  sing_origin: %s\n' "$custom_source"
+    if [[ $ipv4_only -eq 1 ]]; then
+        printf '  仅使用 IPv4: 是\n'
+    else
+        printf '  仅使用 IPv4: 否\n'
+    fi
     printf '\n'
     if [[ $non_interactive -ne 1 ]] && ! confirm "确认安装并迁移到 Xboard-Node Machine mode" "y"; then
         return 0
@@ -653,7 +684,9 @@ cmd_migrate() {
     record_v2bx_state || die "无法记录 V2bX 状态，迁移未开始。"
     backup_file "$V2BX_CONFIG" "V2bX-config.json" || die "V2bX 配置备份失败，迁移未开始。"
     backup_file "$XBOARD_CONFIG" "config.yml" || die "Xboard-Node 配置备份失败，迁移未开始。"
-    backup_file "$XBOARD_CUSTOM_CONFIG" "sing_origin.json" || die "Xboard-Node 自定义配置备份失败，迁移未开始。"
+    if [[ $ipv4_only -eq 1 ]]; then
+        backup_file "$XBOARD_CUSTOM_CONFIG" "sing_origin.json" || die "Xboard-Node 自定义配置备份失败，迁移未开始。"
+    fi
     xboard_installed && force=1
 
     log_info "执行官方 Machine mode 安装..."
@@ -662,13 +695,17 @@ cmd_migrate() {
         return 1
     fi
 
-    if ! copy_sing_origin "$custom_source"; then
-        cleanup_failed_migration || true
-        return 1
-    fi
-    if ! ensure_custom_config_reference; then
-        cleanup_failed_migration || true
-        return 1
+    if [[ $ipv4_only -eq 1 ]]; then
+        if ! write_ipv4_custom_config; then
+            cleanup_failed_migration || true
+            return 1
+        fi
+        if ! ensure_custom_config_reference; then
+            cleanup_failed_migration || true
+            return 1
+        fi
+    else
+        log_info "已选择保留 IPv6。不会创建或修改 sing_origin.json。"
     fi
 
     if ! stop_v2bx; then
@@ -1050,9 +1087,10 @@ ${SCRIPT_NAME} v${SCRIPT_VERSION}
 
 迁移参数:
   xns migrate --panel URL --token TOKEN --machine-id ID
-              [--custom-config PATH] [--health-port PORT] [--yes]
+              [--health-port PORT] [--ipv4-only|--allow-ipv6] [--yes]
 
 一键迁移固定使用 Machine mode。
+交互模式默认启用 IPv4-only；--yes 模式同样默认启用 IPv4-only。
 EOF
 }
 

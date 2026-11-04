@@ -59,6 +59,7 @@ Xboard-Node-Script
 1. 面板地址
 2. Machine Token
 3. Machine ID
+4. 是否仅使用 IPv4（默认是）
 
 运行：
 
@@ -71,7 +72,7 @@ sudo xns migrate
 1. 记录 V2bX 当前状态
 2. 备份 V2bX 配置
 3. 执行 Xboard-Node 官方 Machine mode 安装
-4. 如果存在 `/etc/V2bX/sing_origin.json`，复制到 `/etc/xboard-node/sing_origin.json`
+4. 如果选择仅使用 IPv4，生成新的 `/etc/xboard-node/sing_origin.json`
 5. 在 `config.yml` 中启用 `kernel.custom_config`
 6. 停止并禁用 V2bX
 7. 启用 Xboard-Node 开机自启
@@ -85,6 +86,34 @@ V2bX 的程序和配置不会删除。需要恢复时运行：
 sudo xns rollback
 ```
 
+选择仅使用 IPv4 时，会生成：
+
+```json
+{
+  "dns": {
+    "servers": [
+      { "type": "udp", "tag": "local-dns", "server": "1.1.1.1" }
+    ],
+    "final": "local-dns",
+    "strategy": "ipv4_only"
+  },
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct-ipv4",
+      "domain_resolver": "local-dns"
+    }
+  ],
+  "route": {
+    "default_domain_resolver": "local-dns",
+    "rules": [
+      { "ip_cidr": ["::/0"], "outbound": "block" }
+    ],
+    "final": "direct-ipv4"
+  }
+}
+```
+
 非交互迁移：
 
 ```bash
@@ -93,13 +122,14 @@ sudo xns migrate \
   --token MACHINE_TOKEN \
   --machine-id 4 \
   --health-port 65530 \
+  --ipv4-only \
   --yes
 ```
 
-指定其他 sing-box 配置文件：
+保留 IPv6：
 
 ```bash
---custom-config /path/to/sing_origin.json
+sudo xns migrate --allow-ipv6
 ```
 
 ## 从 V2bX-script 借鉴的功能
