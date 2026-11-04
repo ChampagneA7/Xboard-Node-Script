@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SCRIPT_NAME="Xboard-Node-Script"
-SCRIPT_VERSION="1.0.3"
+SCRIPT_VERSION="1.0.4"
 SCRIPT_RAW_BASE="${XBOARD_SCRIPT_RAW_BASE:-https://raw.githubusercontent.com/ChampagneA7/Xboard-Node-Script/main}"
 OFFICIAL_INSTALL_URL="${XBOARD_NODE_INSTALL_URL:-https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh}"
 
@@ -736,6 +736,7 @@ cmd_start() {
         return 1
     fi
     log_ok "Xboard-Node 已启动。"
+    show_runtime_summary
 }
 
 cmd_stop() {
@@ -763,6 +764,7 @@ cmd_restart() {
     fi
     if wait_for_health; then
         log_ok "Xboard-Node 重启成功。"
+        show_runtime_summary
     else
         log_error "Xboard-Node 重启后健康检查失败。"
         return 1
