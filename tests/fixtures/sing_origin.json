@@ -1,0 +1,22 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "cloudflare",
+        "address": "1.1.1.1"
+      }
+    ],
+    "rules": [
+      {
+        "domain": [
+          "developer.nvidia.com"
+        ],
+        "query_type": [
+          "AAAA"
+        ],
+        "action": "reject"
+      }
+    ],
+    "strategy": "ipv4_only"
+  }
+}
