@@ -120,6 +120,8 @@ grep -q '"strategy": "ipv4_only"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv4 strategy
 grep -q '"tag": "direct-ipv4"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv4 direct outbound missing"
 grep -q '"domain_resolver": "local-dns"' "$XBOARD_CUSTOM_CONFIG" || fail "domain resolver missing"
 grep -q '"default_domain_resolver": "local-dns"' "$XBOARD_CUSTOM_CONFIG" || fail "default domain resolver missing"
+grep -q '"action": "reject"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv6 reject action missing"
+grep -q '"method": "drop"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv6 drop method missing"
 
 # A second invocation must not duplicate the key.
 ensure_custom_config_reference

@@ -107,7 +107,7 @@ sudo xns rollback
   "route": {
     "default_domain_resolver": "local-dns",
     "rules": [
-      { "ip_cidr": ["::/0"], "outbound": "block" }
+      { "ip_cidr": ["::/0"], "action": "reject", "method": "drop" }
     ],
     "final": "direct-ipv4"
   }
