@@ -1,6 +1,6 @@
 # Xboard-Node-Script
 
-`Xboard-Node-Script` 是 Xboard-Node 的菜单式管理脚本，主命令为 `xns`。
+`Xboard-Node-Script` 是一个专注于 Xboard-Node 日常管理的菜单式命令脚本，主命令为 `xns`。
 
 命名含义：
 
@@ -9,6 +9,8 @@ x = Xboard
 n = Node
 s = Script
 ```
+
+脚本只处理 Xboard-Node 自身的安装、升级、服务控制和状态检查，不修改其他服务的配置。
 
 ## 安装
 
@@ -44,138 +46,9 @@ Xboard-Node-Script
 11. 查看版本                xns version
 12. 健康检查                xns health
 13. 实例列表                xns list
-14. 编辑 config.yml         xns config
-15. 编辑 sing_origin.json   xns dns
-16. 从 V2bX 一键迁移        xns migrate
-17. 回滚到 V2bX             xns rollback
-18. 更新管理脚本            xns update-script
-19. 退出
+14. 更新管理脚本            xns update-script
+15. 退出
 ```
-
-## 一键迁移
-
-迁移固定使用 Machine mode，只要求输入：
-
-1. 面板地址
-2. Machine Token
-3. Machine ID
-4. 是否仅使用 IPv4（默认是）
-
-运行：
-
-```bash
-sudo xns migrate
-```
-
-脚本会执行：
-
-1. 记录 V2bX 当前状态
-2. 备份 V2bX 配置
-3. 执行 Xboard-Node 官方 Machine mode 安装
-4. 如果选择仅使用 IPv4，生成新的 `/etc/xboard-node/sing_origin.json`
-5. 在 `config.yml` 中启用 `kernel.custom_config`
-6. 停止并禁用 V2bX
-7. 启用 Xboard-Node 开机自启
-8. 启动 Xboard-Node 并做稳定性健康检查
-
-迁移不会解析 `/etc/V2bX/config.json` 中的协议、节点或内核。节点由面板分配给 Machine。
-
-## 新安装引导
-
-运行：
-
-```bash
-sudo xns install
-```
-
-会依次询问：
-
-1. 面板地址
-2. 运行模式，默认 Machine mode
-3. Machine Token 或服务器 Token
-4. Machine ID 或 Node ID
-5. 内核，默认 singbox
-6. 健康检查端口，默认 65530
-7. 是否仅使用 IPv4，默认是
-
-选择仅使用 IPv4 后，会生成 `sing_origin.json`、启用 `kernel.custom_config`，最后设置开机自启并启动验证。
-
-V2bX 的程序和配置不会删除。需要恢复时运行：
-
-```bash
-sudo xns rollback
-```
-
-选择仅使用 IPv4 时，会生成：
-
-```json
-{
-  "dns": {
-    "servers": [
-      { "type": "udp", "tag": "local-dns", "server": "1.1.1.1" }
-    ],
-    "final": "local-dns",
-    "strategy": "ipv4_only"
-  },
-  "outbounds": [
-    {
-      "type": "direct",
-      "tag": "direct-ipv4",
-      "domain_resolver": "local-dns"
-    }
-  ],
-  "route": {
-    "default_domain_resolver": "local-dns",
-    "rules": [
-      { "ip_cidr": ["::/0"], "action": "reject", "method": "drop" }
-    ],
-    "final": "direct-ipv4"
-  }
-}
-```
-
-非交互迁移：
-
-```bash
-sudo xns migrate \
-  --panel https://import.example.com \
-  --token MACHINE_TOKEN \
-  --machine-id 4 \
-  --health-port 65530 \
-  --ipv4-only \
-  --yes
-```
-
-保留 IPv6：
-
-```bash
-sudo xns migrate --allow-ipv6
-```
-
-## 从 V2bX-script 借鉴的功能
-
-- 短命令和数字菜单
-- 菜单项对应直接命令
-- 启动、停止、重启、状态、日志、开机自启
-- 安装、升级、卸载
-- 配置修改后自动重启
-- 管理脚本原子更新
-- 版本显示
-- 安装前系统和架构检查
-
-未加入：
-
-- 一键 BBR
-- 关闭或清空防火墙
-- x25519 密钥生成
-- V2bX 配置解析
-
-## 安全说明
-
-- 迁移前备份到 `/etc/xboard-node/backups/migrations/`
-- Machine Token 不会写入迁移状态文件
-- Token 输入会明文显示，便于发现输错；请在可信、无录屏的环境操作
-- 非交互命令的 Token 可能留在 shell 历史中，建议优先使用交互模式
 
 ## 开发测试
 

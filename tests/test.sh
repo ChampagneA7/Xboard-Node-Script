@@ -23,16 +23,14 @@ bash -n "$INSTALL_SCRIPT" || fail "install.sh syntax"
 
 export XBOARD_ROOT="${TEST_ROOT}/xboard"
 export XBOARD_CONFIG="${XBOARD_ROOT}/config.yml"
-export XBOARD_CUSTOM_CONFIG="${XBOARD_ROOT}/sing_origin.json"
-export XBOARD_STATE_FILE="${XBOARD_ROOT}/migration-state.env"
 export XBOARD_SERVICE="xboard-node.service"
-export V2BX_SERVICE="V2bX.service"
 
 # shellcheck disable=SC1090
 source "$SCRIPT"
 
 require_root() { :; }
 require_linux_systemd() { :; }
+check_platform() { :; }
 xboard_installed() { return 0; }
 
 systemctl() {
@@ -69,16 +67,6 @@ if printf '%s\n' 'INFO service started' | runtime_log_has_fatal_error; then
     fail "normal startup log marked fatal"
 fi
 
-if bash "$SCRIPT" migrate --panel >/dev/null 2>&1; then
-    fail "missing --panel value should fail"
-fi
-if bash "$SCRIPT" migrate --panel --yes >/dev/null 2>&1; then
-    fail "option token must not be accepted as --panel value"
-fi
-if bash "$SCRIPT" migrate --yes >/dev/null 2>&1; then
-    fail "--yes without required parameters should fail"
-fi
-
 for command_name in cmd_start cmd_stop cmd_enable cmd_disable; do
     SYSTEMCTL_RESULT=1
     if "$command_name" >/dev/null 2>&1; then
@@ -98,116 +86,33 @@ if cmd_health >/dev/null 2>&1; then
     fail "cmd_health should fail when curl fails"
 fi
 
-mkdir -p "$XBOARD_ROOT"
-cat >"$XBOARD_CONFIG" <<'EOF'
-instances:
-  - id: example
-    panel:
-      url: https://panel.example.com
-    kernel:
-      type: singbox
-      log_level: warn
-EOF
+# The menu must only expose the commands that still exist.
+menu_output=$(show_menu)
+grep -q '14.*update-script' <<<"$menu_output" || fail "update-script menu item missing"
+grep -q '15.*退出' <<<"$menu_output" || fail "exit menu item missing"
 
-write_ipv4_custom_config
-ensure_custom_config_reference
+help_output=$(bash "$SCRIPT" help)
+grep -q 'update-script' <<<"$help_output" || fail "update-script help entry missing"
 
-grep -q '^kernel:$' "$XBOARD_CONFIG" || fail "top-level kernel missing"
-grep -q "custom_config: \"$XBOARD_CUSTOM_CONFIG\"" "$XBOARD_CONFIG" || fail "custom_config missing"
-grep -q '^instances:$' "$XBOARD_CONFIG" || fail "instances block missing"
-grep -q '"tag": "local-dns"' "$XBOARD_CUSTOM_CONFIG" || fail "local-dns missing"
-grep -q '"strategy": "ipv4_only"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv4 strategy missing"
-grep -q '"tag": "direct-ipv4"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv4 direct outbound missing"
-grep -q '"domain_resolver": "local-dns"' "$XBOARD_CUSTOM_CONFIG" || fail "domain resolver missing"
-grep -q '"default_domain_resolver": "local-dns"' "$XBOARD_CUSTOM_CONFIG" || fail "default domain resolver missing"
-grep -q '"action": "reject"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv6 reject action missing"
-grep -q '"method": "drop"' "$XBOARD_CUSTOM_CONFIG" || fail "IPv6 drop method missing"
-
-# A second invocation must not duplicate the key.
-ensure_custom_config_reference
-count=$(grep -c "custom_config: \"$XBOARD_CUSTOM_CONFIG\"" "$XBOARD_CONFIG")
-[[ $count -eq 1 ]] || fail "custom_config duplicated"
-
-# rollback must not stop Xboard-Node when V2bX is unavailable.
-: >"$SYSTEMCTL_LOG"
-(
-    # shellcheck disable=SC2317
-    v2bx_installed() { return 1; }
-    rollback_to_v2bx
-) >/dev/null 2>&1 || true
-if grep -q "stop ${XBOARD_SERVICE}" "$SYSTEMCTL_LOG"; then
-    fail "rollback stopped Xboard-Node before checking V2bX"
-fi
-
-# rollback must not start V2bX if Xboard-Node could not be stopped.
-: >"$SYSTEMCTL_LOG"
-# shellcheck disable=SC2317
-(
-    v2bx_installed() { return 0; }
-    systemctl() {
-        printf '%s\n' "$*" >>"$SYSTEMCTL_LOG"
-        if [[ $1 == "stop" && $2 == "$XBOARD_SERVICE" ]]; then
-            return 1
-        fi
-        return 0
-    }
-    rollback_to_v2bx
-) >/dev/null 2>&1 || true
-if grep -q "start ${V2BX_SERVICE}" "$SYSTEMCTL_LOG"; then
-    fail "rollback started V2bX after failing to stop Xboard-Node"
-fi
-
-# Repeated migrations must preserve the original rollback state.
-MOCK_V2BX_ACTIVE=1
-MOCK_V2BX_ENABLED=1
-service_active() { [[ $MOCK_V2BX_ACTIVE -eq 1 ]]; }
-service_enabled() { [[ $MOCK_V2BX_ENABLED -eq 1 ]]; }
-record_v2bx_state
-MOCK_V2BX_ACTIVE=0
-MOCK_V2BX_ENABLED=0
-record_v2bx_state
-# shellcheck disable=SC1090
-source "$XBOARD_STATE_FILE"
-[[ $V2BX_WAS_ACTIVE -eq 1 && $V2BX_WAS_ENABLED -eq 1 ]] || fail "rollback state was overwritten"
-
-rm -f "$XBOARD_STATE_FILE"
-MOCK_V2BX_ACTIVE=0
-MOCK_V2BX_ENABLED=1
-record_v2bx_state
-MOCK_V2BX_ACTIVE=0
-MOCK_V2BX_ENABLED=0
-record_v2bx_state
-# shellcheck disable=SC1090
-source "$XBOARD_STATE_FILE"
-[[ $V2BX_WAS_ACTIVE -eq 0 && $V2BX_WAS_ENABLED -eq 1 ]] || fail "stopped-enabled state was overwritten"
-
-# A failed post-install migration step must clean up and must not stop V2bX.
-migration_trace="${TEST_ROOT}/migration-trace"
-# shellcheck disable=SC2317
-(
-    require_root() { :; }
-    require_linux_systemd() { :; }
-    check_platform() { :; }
-    record_v2bx_state() { :; }
-    backup_file() { :; }
-    xboard_installed() { return 1; }
-    install_machine() { return 0; }
-    write_ipv4_custom_config() { return 1; }
-    ensure_custom_config_reference() { return 0; }
-    stop_v2bx() { printf 'stop-v2bx\n' >>"$migration_trace"; return 0; }
-    cleanup_failed_migration() { printf 'cleanup\n' >>"$migration_trace"; return 0; }
-    start_xboard() { return 0; }
-    if cmd_migrate --panel https://panel.example.com --token token --machine-id 4 --yes >/dev/null 2>&1; then
-        exit 1
-    fi
-    exit 0
-) || fail "migration IPv4 config failure should return non-zero"
-[[ $(cat "$migration_trace") == "cleanup" ]] || fail "migration did not clean up after IPv4 config failure"
-
-# Inline top-level kernel mappings are rejected instead of being corrupted.
-inline_config="${TEST_ROOT}/inline-config.yml"
-printf 'kernel: {type: singbox}\ninstances: []\n' >"$inline_config"
-XBOARD_CONFIG="$inline_config" ensure_custom_config_reference >/dev/null 2>&1 && \
-    fail "inline kernel config should be rejected"
+# Installation still invokes the official installer with the selected mode.
+install_args=""
+prompt_value() {
+    case "$2" in
+        "面板地址") printf -v "$1" '%s' "import.example.com" ;;
+        "Machine ID") printf -v "$1" '%s' "4" ;;
+        "Machine Token") printf -v "$1" '%s' "token" ;;
+        "内核 (singbox/xray)") printf -v "$1" '%s' "singbox" ;;
+        "健康检查端口") printf -v "$1" '%s' "65530" ;;
+        *) return 1 ;;
+    esac
+}
+choose_mode() { printf -v "$1" '%s' "machine"; }
+run_official_installer() { install_args="$*"; return 0; }
+start_xboard() { return 0; }
+xboard_installed() { return 1; }
+cmd_install >/dev/null || fail "cmd_install failed with mocked installer"
+grep -q -- '--mode machine' <<<"$install_args" || fail "install mode missing"
+grep -q -- '--machine-id 4' <<<"$install_args" || fail "machine id missing"
+grep -q -- '--health-port 65530' <<<"$install_args" || fail "health port missing"
 
 printf '[PASS] all tests passed\n'
