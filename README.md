@@ -50,8 +50,85 @@ Xboard-Node-Script
 15. 验证中转并生成配置     xns relay transit
 16. 更新 SS2022            xns relay update
 17. 更新管理脚本            xns update-script
-18. 退出
+18. TCP 调优               xns tcp
+19. 端口白/黑名单          xns firewall
+20. 退出
 ```
+
+菜单编号也可以直接作为命令使用，例如 `xns 18`、`xns 19`。
+
+## TCP 调优
+
+```bash
+xns tcp
+```
+
+脚本会下载并校验 `Kylin010/tcpfit` 的 `tcpfit.sh`，随后进入其交互式调优菜单。上游脚本可执行检测、调优、限速、状态查看和回滚；TCP 参数修改前，请先确认机器用途和现有网络策略。
+
+上游地址可通过环境变量覆盖：
+
+```bash
+export XBOARD_TCPFIT_URL="https://example.com/tcpfit.sh"
+```
+
+## 端口白名单和黑名单
+
+```bash
+xns firewall
+```
+
+端口策略会自动适配当前系统防火墙，支持 UFW、firewalld、nftables 和 iptables。默认优先使用已启用的 UFW/firewalld，再回退到 nftables/iptables。
+
+- UFW：写入 `before.rules` / `before6.rules` 的独立高优先级链，并随 UFW 原生持久化。
+- firewalld：使用高优先级 rich rule，并随 firewalld 原生持久化（需要 firewalld 0.9 及以上）。
+- nftables：使用独立的 `inet xns_ports` 表，附带开机 systemd 服务。
+- iptables：使用独立的 `XNS_PORTS` 链，附带开机 systemd 服务。
+
+该功能只增加自己的策略，不会删除现有放行规则。
+
+常用命令：
+
+```bash
+xns firewall status
+xns firewall list
+xns firewall whitelist --ports 80,443
+xns firewall blacklist --ports 52
+xns firewall clear
+```
+
+菜单中的 `1` 可以直接查看当前白名单或黑名单列表，也可以随时运行 `xns firewall list`。
+
+数字操作流程：
+
+```text
+xns 19
+→ 1 查看列表
+→ 2 设置白名单
+→ 3 设置黑名单
+→ 4 清除策略
+→ 0 返回主菜单
+```
+
+需要强制指定后端时：
+
+```bash
+xns firewall whitelist --ports 80,443 --backend ufw --yes
+xns firewall blacklist --ports 52 --backend iptables --yes
+```
+
+可用后端为 `auto`、`ufw`、`firewalld`、`nftables`、`iptables`。
+
+端口写法：
+
+```text
+80,443          TCP 和 UDP 都生效
+80/tcp,53/udp   指定协议
+1000-2000/tcp   端口范围
+```
+
+白名单只放行列出的端口，并自动保留 `22/TCP` 和当前 SSH 端口，避免远程连接被锁死。黑名单禁止列出的端口，且不允许包含 `22/TCP` 或当前 SSH 端口。清除策略后会删除独立规则并恢复原有 UFW/firewalld 行为。
+
+UFW 和 firewalld 使用其原生持久化机制；nftables 和 iptables 使用 `xns-firewall.service` 在开机时恢复。
 
 ## SS2022 中转
 
